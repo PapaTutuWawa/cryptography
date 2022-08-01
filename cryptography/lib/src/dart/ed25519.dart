@@ -43,6 +43,48 @@ class DartEd25519 extends Ed25519 {
     ));
   }
 
+  /// Convert the public key of a Ed25519 [keyPair] into a X25519 key.
+  static Future<SimplePublicKey> publicKeyToCurve25519(KeyPair keyPair) async {
+    final keyPairData = (await keyPair.extract()) as SimpleKeyPairData;
+    final publicKeyData = await keyPairData.extractPublicKey();
+    final publicKeyBytes = publicKeyData.bytes;
+
+    // Taken from https://en.wikipedia.org/wiki/Montgomery_curve#Equivalence_with_twisted_Edwards_curves
+    final p = _pointDecompress(publicKeyBytes)!;
+    final n = Register25519()..add(Register25519.one, p.y);
+    final du = Register25519()..sub(Register25519.one, p.y);
+    du.pow(du, Register25519.PMinusTwo);
+    final u = Register25519()..mul(n, du);
+
+    final dv = Register25519();
+    dv.sub(Register25519.one, p.y);
+    dv.mul(dv, p.x);
+    dv.pow(dv, Register25519.PMinusTwo);
+    final v = Register25519()..mul(n, dv);
+
+    final uv = Register25519()..mul(u, v);
+    final point = _pointCompress(Ed25519Point(u, v, Register25519.one, uv));
+    
+    return SimplePublicKey(point, type: KeyPairType.x25519);
+  }
+
+  /// Convert the private key of a Ed25519 [keyPair] into a X25519 private key.
+  static Future<List<int>> privateKeyToCurve25519(KeyPair keyPair) async {
+    final keyPairData = (await keyPair.extract()) as SimpleKeyPairData;
+    final privateKeyBytes = await keyPairData.extractPrivateKeyBytes();
+ 
+    // From https://github.com/jedisct1/libsodium/blob/master/src/libsodium/crypto_sign/ed25519/ref10/keypair.c#L70
+    final privateKeyHash = await Sha512().hash(privateKeyBytes);
+    final privateKeyHashBytes = privateKeyHash.bytes.sublist(0, 32);
+
+    // Clamping?
+    privateKeyHashBytes[0] &= 248;
+    privateKeyHashBytes[31] &= 127;
+    privateKeyHashBytes[31] |= 64;
+    
+    return privateKeyHashBytes;
+  }
+  
   // Compresses a point
   @override
   Future<Signature> sign(
